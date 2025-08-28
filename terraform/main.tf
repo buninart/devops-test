@@ -40,3 +40,6 @@ resource "twc_server_ip" "ip1" {
   type             = "ipv4"
   ptr              = "devops-server-2.example.com"  # Опционально
 }
+# Опционально: Для Kubernetes можно использовать Deployment и Service
+# Требуется minikube, kubectl, минимум 2 GB RAM, и манифесты
+# Пример: apiVersion: apps/v1, kind: Deployment, spec: replicas: 2

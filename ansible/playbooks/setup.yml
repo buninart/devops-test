@@ -1,0 +1,139 @@
+---
+- name: Setup web servers with Nginx  # Основной плейбук для настройки веб-серверов 
+  hosts: webservers  # Группа хостов из инвентаря 
+  become: yes  # Запуск с правами root 
+
+  tasks:
+    - name: Update apt cache  # Обновление кэша пакетов для Ubuntu 
+      apt:
+        update_cache: yes
+      when: ansible_distribution == 'Ubuntu'  # Только для Ubuntu 
+
+    - name: Update all packages  # Обновление всех пакетов (универсально) 
+      package:
+        name: '*'
+        state: latest
+      when: ansible_pkg_mgr != 'unknown'  # Универсально для разных ОС 
+
+    - name: Install common dependencies  # Установка общих зависимостей 
+      package:
+        name:
+          - curl
+          - git
+        state: present
+
+    - name: Install Nginx  # Установка Nginx 
+      apt:
+        name: nginx
+        state: latest  # Устанавливаем последнюю доступную версию 
+      when: ansible_distribution == 'Ubuntu'  # Только для Ubuntu 
+
+    - name: Check Nginx installation  # Проверка установки Nginx 
+      command: which nginx  # Проверяем наличие исполняемого файла 
+      register: nginx_check
+      changed_when: false
+      failed_when: nginx_check.rc != 0
+
+    - name: Reload systemd daemon  # Перезагрузка systemd 
+      systemd:
+        daemon_reload: yes
+      when: ansible_distribution == 'Ubuntu'  # Только для Ubuntu 
+
+    - name: Ensure Nginx service is started  # Запуск и активация службы Nginx 
+      systemd:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Deploy Nginx configuration  # Деплой конфигурации Nginx 
+      template:
+        src: ../roles/nginx/templates/nginx.conf.j2
+        dest: /etc/nginx/sites-available/default
+      notify: Restart Nginx
+
+    - name: Enable Nginx configuration  # Активация конфигурации Nginx 
+      file:
+        src: /etc/nginx/sites-available/default
+        dest: /etc/nginx/sites-enabled/default
+        state: link
+        force: yes  # Разрешаем создание ссылки даже если src отсутствует 
+      notify: Restart Nginx
+
+    - name: Deploy HTML page  # Деплой HTML-страницы 
+      template:
+        src: ../templates/index.html.j2
+        dest: /usr/share/nginx/html/index.html
+        mode: 0644
+      notify: Restart Nginx
+
+    - name: Install Docker  # Установка Docker (для пункта 4 задания) 
+      apt:
+        name: docker.io
+        state: latest  # Устанавливаем последнюю версию Docker 
+      when: ansible_distribution == 'Ubuntu'  # Только для Ubuntu 
+
+    - name: Start Docker service  # Запуск службы Docker
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Copy Docker files to remote  # Копирование файлов Docker на сервер
+      copy:
+        src: ../../docker/
+        dest: /tmp/docker/
+
+    - name: Build Docker image  # Сборка Docker-образа 
+      command: docker build -t my-nginx .
+      args:
+        chdir: /tmp/docker/
+      register: build_result
+      failed_when: build_result.rc != 0
+
+    - name: Run Docker container  # Запуск Docker-контейнера 
+      command: docker run -d -p 80:80 --name nginx-container my-nginx
+      register: run_result
+      failed_when: run_result.rc != 0 and 'already in use' not in run_result.stderr
+
+  handlers:
+    - name: Restart Nginx  # Перезапуск Nginx 
+      systemd:
+        name: nginx
+        state: restarted
+
+  # Комментарий: Для Kubernetes (альтернатива Docker) можно использовать minikube или K8s кластер
+  # Требования: minikube, kubectl, минимум 2 GB RAM
+  # Пример манифеста Deployment:
+  # apiVersion: apps/v1
+  # kind: Deployment
+  # metadata:
+  #   name: nginx-deployment
+  # spec:
+  #   replicas: 2
+  #   selector:
+  #     matchLabels:
+  #       app: nginx
+  #   template:
+  #     metadata:
+  #       labels:
+  #         app: nginx
+  #     spec:
+  #       containers:
+  #         - name: nginx
+  #           image: nginx:latest
+  #           ports:
+  #             - containerPort: 80
+  # Пример Service:
+  # apiVersion: v1
+  # kind: Service
+  # metadata:
+  #   name: nginx-service
+  # spec:
+  #   selector:
+  #     app: nginx
+  #   ports:
+  #     - protocol: TCP
+  #       port: 80
+  #       targetPort: 80
+  #   type: LoadBalancer
+  # Деплой: kubectl apply -f deployment.yaml && kubectl apply -f service.yaml
